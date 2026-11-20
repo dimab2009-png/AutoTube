@@ -9,8 +9,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Unpack
         run: |
-          unzip -q AutoTube.zip -d /tmp/x
-          rm AutoTube.zip
+          f=$(ls -t *.zip | head -n1)
+          echo "Using $f"
+          unzip -q "$f" -d /tmp/x
+          rm -f *.zip
           rm -rf /tmp/x/AutoTube/.github
           cp -a /tmp/x/AutoTube/. .
       - name: Commit
