@@ -5,6 +5,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Unpack newest zip
+        run: |
+          f=$(git log --diff-filter=AM --name-only --pretty=format: -- '*.zip' | grep -v '^$' | head -n1 || true)
+          if [ -n "$f" ] && [ -f "$f" ]; then
+            echo "Using $f"
+            rm -rf /tmp/x
+            unzip -q "$f" -d /tmp/x
+            rm -rf /tmp/x/AutoTube/.github
+            cp -a /tmp/x/AutoTube/. .
+          fi
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 17 }
       - uses: gradle/actions/setup-gradle@v4
