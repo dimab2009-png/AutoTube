@@ -2,6 +2,7 @@ package dev.example.autotube
 
 import android.content.Context
 import android.text.Html
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -17,6 +18,9 @@ class Store(ctx: Context) {
     var clientSecret: String
         get() = sp.getString("csec", "") ?: ""
         set(v) = sp.edit().putString("csec", v.trim()).apply()
+    var apiKey: String
+        get() = sp.getString("key", "") ?: ""
+        set(v) = sp.edit().putString("key", v.trim()).apply()
     var accessToken: String
         get() = sp.getString("at", "") ?: ""
         set(v) = sp.edit().putString("at", v).apply()
@@ -118,19 +122,37 @@ class YouTubeAuth(private val store: Store) {
 
 data class Item(val id: String, val title: String, val subtitle: String, val thumb: String, val isPlaylist: Boolean = false)
 
-/** YouTube Data API v3 (официальный API, чтение). */
-class YouTubeApi(private val auth: YouTubeAuth) {
+/** YouTube Data API v3 (официальный API, чтение). Работает с токеном аккаунта или с API-ключом без входа. */
+class YouTubeApi(private val auth: YouTubeAuth, private val store: Store) {
     private fun get(path: String, vararg q: Pair<String, String>): JSONObject {
-        val token = auth.validToken() ?: throw IOException("Нужно войти в аккаунт (кнопка «Аккаунт»)")
-        val (c, j) = Http.request("https://www.googleapis.com/youtube/v3/$path?" + Http.form(*q), "GET", null, token)
+        val token = auth.validToken()
+        if (token == null && store.apiKey.isBlank())
+            throw IOException("Вставьте ссылку на видео в поиск или добавьте API-ключ / войдите (кнопка «Аккаунт»)")
+        val params = q.toList() + (if (token == null) listOf("key" to store.apiKey) else emptyList())
+        val (c, j) = Http.request(
+            "https://www.googleapis.com/youtube/v3/$path?" + Http.form(*params.toTypedArray()), "GET", null, token
+        )
         if (c !in 200..299) throw IOException(j.optJSONObject("error")?.optString("message") ?: "HTTP $c")
         return j
+    }
+
+    private fun requireLogin() {
+        if (!auth.isSignedIn()) throw IOException("Для этого раздела нужен вход в аккаунт (кнопка «Аккаунт»)")
     }
 
     private fun thumb(sn: JSONObject) =
         sn.optJSONObject("thumbnails")?.optJSONObject("medium")?.optString("url") ?: ""
 
     private fun clean(s: String) = Html.fromHtml(s, Html.FROM_HTML_MODE_LEGACY).toString()
+
+    private fun parseVideos(arr: JSONArray?): List<Item> {
+        if (arr == null) return emptyList()
+        return (0 until arr.length()).map { i ->
+            val o = arr.getJSONObject(i)
+            val sn = o.getJSONObject("snippet")
+            Item(o.getString("id"), clean(sn.optString("title")), clean(sn.optString("channelTitle")), thumb(sn))
+        }
+    }
 
     fun search(query: String): List<Item> {
         val arr = get("search", "part" to "snippet", "type" to "video", "maxResults" to "25", "q" to query)
@@ -143,17 +165,23 @@ class YouTubeApi(private val auth: YouTubeAuth) {
         }
     }
 
+    fun trending(): List<Item> {
+        val region = java.util.Locale.getDefault().country.ifEmpty { "US" }
+        return parseVideos(
+            get("videos", "part" to "snippet", "chart" to "mostPopular", "regionCode" to region, "maxResults" to "25")
+                .optJSONArray("items")
+        )
+    }
+
     fun liked(): List<Item> {
-        val arr = get("videos", "part" to "snippet", "myRating" to "like", "maxResults" to "50")
-            .optJSONArray("items") ?: return emptyList()
-        return (0 until arr.length()).map { i ->
-            val o = arr.getJSONObject(i)
-            val sn = o.getJSONObject("snippet")
-            Item(o.getString("id"), clean(sn.optString("title")), clean(sn.optString("channelTitle")), thumb(sn))
-        }
+        requireLogin()
+        return parseVideos(
+            get("videos", "part" to "snippet", "myRating" to "like", "maxResults" to "50").optJSONArray("items")
+        )
     }
 
     fun playlists(): List<Item> {
+        requireLogin()
         val arr = get("playlists", "part" to "snippet", "mine" to "true", "maxResults" to "50")
             .optJSONArray("items") ?: return emptyList()
         return (0 until arr.length()).map { i ->

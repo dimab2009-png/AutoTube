@@ -44,7 +44,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         store = Store(this)
         auth = YouTubeAuth(store)
-        api = YouTubeApi(auth)
+        api = YouTubeApi(auth, store)
         adapter = ItemAdapter(this)
 
         window.statusBarColor = Ui.BG
@@ -69,7 +69,9 @@ class MainActivity : ComponentActivity() {
             background = pill(Ui.CHIP)
             minHeight = 0
             minimumHeight = 0
-            setPadding(dp(16), 0, dp(16), 0)
+            setPadding(dp(6), 0, dp(6), 0)
+            textSize = 12f
+            setSingleLine()
             setOnClickListener { onClick() }
         }
 
@@ -86,6 +88,9 @@ class MainActivity : ComponentActivity() {
                 typeface = Typeface.DEFAULT_BOLD
                 setPadding(dp(8), 0, 0, 0)
             }, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT))
+            addView(android.view.View(this@MainActivity), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(chip("Сайт YouTube") { startActivity(Intent(this@MainActivity, BrowserActivity::class.java)) },
+                margins(LinearLayout.LayoutParams(WRAP_CONTENT, dp(36))))
         }
         val searchRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -94,6 +99,7 @@ class MainActivity : ComponentActivity() {
         }
         val tabs = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            addView(chip("Тренды") { load { api.trending() } }, margins(LinearLayout.LayoutParams(0, dp(40), 1f)))
             addView(chip("Лайки") { load { api.liked() } }, margins(LinearLayout.LayoutParams(0, dp(40), 1f)))
             addView(chip("Плейлисты") { load { api.playlists() } }, margins(LinearLayout.LayoutParams(0, dp(40), 1f)))
             addView(chip("Аккаунт") { accountMenu() }, margins(LinearLayout.LayoutParams(0, dp(40), 1f)))
@@ -103,7 +109,7 @@ class MainActivity : ComponentActivity() {
             setTextColor(Ui.GRAY)
             setPadding(dp(8), dp(6), dp(8), dp(6))
             text = if (auth.isSignedIn()) "Вы вошли. Найдите видео или откройте лайки и плейлисты."
-            else "Нажмите «Аккаунт»: введите ключи Google и войдите."
+            else "Проще всего: в приложении YouTube нажмите «Поделиться» → AutoTube, или откройте «Сайт YouTube»."
         }
         val list = ListView(this).apply {
             divider = null
@@ -123,6 +129,7 @@ class MainActivity : ComponentActivity() {
             addView(status, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
             addView(list, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
         })
+        handleShared(intent)
     }
 
     override fun onStart() {
@@ -137,9 +144,26 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
     }
 
+    private fun videoIdFrom(text: String): String? =
+        Regex("(?:v=|youtu\\.be/|embed/|shorts/|live/)([A-Za-z0-9_-]{11})").find(text)?.groupValues?.get(1)
+
+    /** Видео, отправленное из приложения YouTube через «Поделиться». */
+    private fun handleShared(i: Intent?) {
+        if (i?.action != Intent.ACTION_SEND) return
+        val text = i.getStringExtra(Intent.EXTRA_TEXT) ?: return
+        val id = videoIdFrom(text) ?: return
+        startActivity(Intent(this, PlayerActivity::class.java).putExtra("id", id).putExtra("title", "Видео из YouTube"))
+    }
+
     private fun doSearch() {
         val q = searchBox.text.toString().trim()
-        if (q.isNotEmpty()) load { api.search(q) }
+        if (q.isEmpty()) return
+        val id = videoIdFrom(q)
+        if (id != null) {
+            startActivity(Intent(this, PlayerActivity::class.java).putExtra("id", id).putExtra("title", "Видео по ссылке"))
+        } else {
+            load { api.search(q) }
+        }
     }
 
     private fun open(item: Item) {
@@ -166,7 +190,7 @@ class MainActivity : ComponentActivity() {
 
     private fun accountMenu() {
         AlertDialog.Builder(this)
-            .setItems(arrayOf("Ввести Client ID / Secret", "Войти в YouTube", "Выйти")) { _, which ->
+            .setItems(arrayOf("Ввести ключи Google", "Войти в YouTube", "Выйти")) { _, which ->
                 when (which) {
                     0 -> credsDialog()
                     1 -> startLogin()
@@ -176,21 +200,24 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun credsDialog() {
-        val id = EditText(this).apply { hint = "Client ID"; setText(store.clientId); setSingleLine() }
-        val secret = EditText(this).apply { hint = "Client secret"; setText(store.clientSecret); setSingleLine() }
+        val key = EditText(this).apply { hint = "API-ключ (для поиска без входа)"; setText(store.apiKey); setSingleLine() }
+        val id = EditText(this).apply { hint = "Client ID (для входа)"; setText(store.clientId); setSingleLine() }
+        val secret = EditText(this).apply { hint = "Client secret (для входа)"; setText(store.clientSecret); setSingleLine() }
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 16, 48, 0)
+            addView(key)
             addView(id)
             addView(secret)
         }
         AlertDialog.Builder(this)
-            .setTitle("Ключи Google (TV и устройства)")
+            .setTitle("Ключи Google")
             .setView(box)
             .setPositiveButton("Сохранить") { _, _ ->
+                store.apiKey = key.text.toString()
                 store.clientId = id.text.toString()
                 store.clientSecret = secret.text.toString()
-                status.text = "Ключи сохранены. Теперь «Аккаунт» → «Войти в YouTube»."
+                status.text = "Ключи сохранены."
             }
             .setNegativeButton("Отмена", null)
             .show()
